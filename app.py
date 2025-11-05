@@ -206,7 +206,7 @@ Return ONLY valid JSON, no markdown formatting."""
         )
         
         content = response.choices[0].message.content
-        # Remove markdown code blocks if present
+        # Remove Markdown code blocks if present
         if content.startswith('```'):
             content = content.split('```')[1]
             if content.startswith('json'):
@@ -583,4 +583,3 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 3000))
     debug = os.environ.get('FLASK_ENV') != 'production'
     app.run(host='0.0.0.0', port=port, debug=debug)
-
