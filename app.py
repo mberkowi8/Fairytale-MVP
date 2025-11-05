@@ -19,8 +19,7 @@ from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 from dotenv import load_dotenv
-from eventlet import monkey_patch
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO
 
 # Load environment variables from .env file
 load_dotenv()
@@ -38,7 +37,6 @@ app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['OUTPUT_FOLDER'] = 'outputs'
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
-monkey_patch()
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # Allowed file extensions for images
