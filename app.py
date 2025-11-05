@@ -7,7 +7,7 @@ import glob
 from flask import Flask, request, render_template, jsonify, send_file
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
-from PIL import Image
+from PIL import Image, ImageDraw
 import io
 import base64
 from openai import OpenAI
@@ -54,11 +54,13 @@ except Exception as e:
 STORY_TEMPLATES = {
     'little_red_riding_hood': {
         'title': 'Little Red Riding Hood',
-        'character_name': 'Little Red Riding Hood'
+        'character_name': 'Little Red Riding Hood',
+        'folder': 'LRRH'
     },
     'jack_and_the_beanstalk': {
         'title': 'Jack and the Beanstalk',
-        'character_name': 'Jack'
+        'character_name': 'Jack',
+        'folder': 'JATB'
     }
 }
 
@@ -149,185 +151,6 @@ def analyze_image(image_path):
         logger.error(f"Error analyzing image: {e}")
         return "a child with kind features"
 
-def generate_story_outline(story_type, gender, character_description):
-    """Generate 12-page story outline in JSON format"""
-    if not openai_client:
-        # Return fallback story if API not configured
-        return generate_fallback_story(story_type, gender, character_description)
-    
-    template = STORY_TEMPLATES[story_type]
-    story_title = template['title']
-    character_name = template['character_name']
-    
-    if story_type == 'little_red_riding_hood':
-        story_prompt = f"""Create a 12-page children's story based on Little Red Riding Hood, starring {character_name} (a {gender} described as {character_description}).
-
-Structure it as a JSON object with:
-- story_title: "{story_title}"
-- pages: array of 12 objects, each with:
-  - page_number: 1-12
-  - scene_description: brief scene description
-  - text: 2-3 sentences for this page (child-friendly, age-appropriate)
-  - image_prompt: detailed prompt for image generation maintaining consistent character appearance: {character_description}
-
-The story should:
-- Page 1: Cover page with {character_name}
-- Pages 2-11: The adventure story
-- Page 12: Happy ending
-
-Return ONLY valid JSON, no markdown formatting."""
-    else:  # jack_and_the_beanstalk
-        story_prompt = f"""Create a 12-page children's story based on Jack and the Beanstalk, starring {character_name} (a {gender} described as {character_description}).
-
-Structure it as a JSON object with:
-- story_title: "{story_title}"
-- pages: array of 12 objects, each with:
-  - page_number: 1-12
-  - scene_description: brief scene description
-  - text: 2-3 sentences for this page (child-friendly, age-appropriate)
-  - image_prompt: detailed prompt for image generation maintaining consistent character appearance: {character_description}
-
-The story should:
-- Page 1: Cover page with {character_name}
-- Pages 2-11: The adventure story with the beanstalk
-- Page 12: Happy ending
-
-Return ONLY valid JSON, no markdown formatting."""
-
-    try:
-        response = openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a children's story writer. Always return valid JSON only."},
-                {"role": "user", "content": story_prompt}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.7
-        )
-        
-        content = response.choices[0].message.content
-        # Remove Markdown code blocks if present
-        if content.startswith('```'):
-            content = content.split('```')[1]
-            if content.startswith('json'):
-                content = content[4:]
-        content = content.strip()
-        
-        story_json = json.loads(content)
-        
-        # Ensure story has required structure
-        if 'pages' not in story_json or not isinstance(story_json['pages'], list):
-            raise ValueError("Invalid story structure")
-        
-        # Ensure we have exactly 12 pages
-        if len(story_json['pages']) != 12:
-            # Pad or trim to 12 pages
-            if len(story_json['pages']) < 12:
-                while len(story_json['pages']) < 12:
-                    story_json['pages'].append({
-                        "page_number": len(story_json['pages']) + 1,
-                        "scene_description": "Story continues",
-                        "text": "The adventure continues...",
-                        "image_prompt": f"{character_description}, children's book illustration"
-                    })
-            else:
-                story_json['pages'] = story_json['pages'][:12]
-        
-        return story_json
-    except Exception as e:
-        logger.error(f"Error generating story: {e}")
-        # Fallback story structure
-        return generate_fallback_story(story_type, gender, character_description)
-
-def generate_fallback_story(story_type, gender, character_description):
-    """Fallback story if AI generation fails"""
-    template = STORY_TEMPLATES[story_type]
-    pages = []
-    
-    if story_type == 'little_red_riding_hood':
-        scenes = [
-            "Cover: {character_name} in red hood",
-            "{character_name} leaves home with a basket",
-            "Walking through the forest",
-            "Meeting the wolf in the forest",
-            "The wolf rushes ahead",
-            "{character_name} arrives at grandmother's house",
-            "The wolf is in grandmother's bed",
-            "The wolf reveals himself",
-            "A brave woodcutter arrives",
-            "The woodcutter saves {character_name}",
-            "Safe return home",
-            "Happy ending with family"
-        ]
-    else:  # jack_and_the_beanstalk
-        scenes = [
-            "Cover: {character_name} at home",
-            "{character_name} trades cow for magic beans",
-            "Beans grow into giant beanstalk",
-            "{character_name} climbs the beanstalk",
-            "Reaching the clouds",
-            "Finding a giant's castle",
-            "Entering the castle",
-            "Taking the golden goose",
-            "The giant wakes up",
-            "Climbing down quickly",
-            "Cutting down the beanstalk",
-            "Happy ending with family"
-        ]
-    
-    for i, scene in enumerate(scenes, 1):
-        pages.append({
-            "page_number": i,
-            "scene_description": scene.format(character_name=template['character_name']),
-            "text": f"This is page {i} of the story.",
-            "image_prompt": f"{scene.format(character_name=template['character_name'])}, featuring {character_description}, children's book illustration style, vibrant colors"
-        })
-    
-    return {
-        "story_title": template['title'],
-        "pages": pages
-    }
-
-def generate_image(prompt, character_description, story_context="", page_num=1):
-    """Generate an image using OpenAI DALL-E"""
-    if not openai_client:
-        # Return placeholder if API not configured
-        return Image.new('RGB', (1024, 1024), color='lightblue')
-    try:
-        # Enhanced prompt with consistency requirements
-        # Limit prompt length (DALL-E has max length limits)
-        base_prompt = prompt[:400] if len(prompt) > 400 else prompt
-        char_desc = character_description[:200] if len(character_description) > 200 else character_description
-        
-        full_prompt = f"{base_prompt}. Character: {char_desc}. Consistent character appearance, children's book illustration style, Disney Brave aesthetic, vibrant colors, square composition, page {page_num} of 12"
-        
-        response = openai_client.images.generate(
-            model="dall-e-3",
-            prompt=full_prompt[:1000],  # DALL-E 3 has prompt length limits
-            size="1024x1024",
-            quality="standard",
-            n=1,
-        )
-        
-        image_url = response.data[0].url
-        
-        # Download the image with retry logic
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                img_response = requests.get(image_url, timeout=30)
-                img_response.raise_for_status()
-                return Image.open(io.BytesIO(img_response.content))
-            except requests.RequestException as e:
-                if attempt == max_retries - 1:
-                    raise
-                time.sleep(2 ** attempt)  # Exponential backoff
-        
-    except Exception as e:
-        logger.error(f"Error generating image (page {page_num}): {e}")
-        # Return a placeholder image
-        return Image.new('RGB', (1024, 1024), color='lightblue')
-
 def create_pdf(images_with_text, output_path):
     """Create an 8.5" × 8.5" PDF with full bleed images"""
     # 8.5 inches in points (72 points per inch)
@@ -364,26 +187,29 @@ def create_pdf(images_with_text, output_path):
             c.setFillColorRGB(0.1, 0.1, 0.1)  # Dark gray text for readability
             c.setFont("Helvetica-Bold", 18)
             
-            # Wrap text to fit page width
-            words = text.split()
-            lines = []
-            current_line = []
-            max_width = page_size - 40  # 20pt margins on each side
-            
-            for word in words:
-                test_line = ' '.join(current_line + [word]) if current_line else word
-                if c.stringWidth(test_line, "Helvetica-Bold", 18) < max_width:
-                    current_line.append(word)
-                else:
+            # Split by newlines first (for cover title/subtitle), then wrap each line
+            all_lines = []
+            for paragraph in text.split('\n'):
+                if paragraph.strip():
+                    # Wrap this paragraph to fit page width
+                    words = paragraph.split()
+                    current_line = []
+                    max_width = page_size - 40  # 20pt margins on each side
+                    
+                    for word in words:
+                        test_line = ' '.join(current_line + [word]) if current_line else word
+                        if c.stringWidth(test_line, "Helvetica-Bold", 18) < max_width:
+                            current_line.append(word)
+                        else:
+                            if current_line:
+                                all_lines.append(' '.join(current_line))
+                            current_line = [word]
                     if current_line:
-                        lines.append(' '.join(current_line))
-                    current_line = [word]
-            if current_line:
-                lines.append(' '.join(current_line))
+                        all_lines.append(' '.join(current_line))
             
             # Draw text lines (show up to 4 lines)
             y_pos = 30
-            for line in lines[-4:]:
+            for line in all_lines[-4:]:
                 if line.strip():
                     c.drawString(20, y_pos, line[:80])  # Limit line length
                     y_pos += 28
@@ -392,8 +218,122 @@ def create_pdf(images_with_text, output_path):
     
     c.save()
 
-def generate_book_async(session_id, image_path, story_type, gender):
-    """Async function to generate the entire book"""
+def load_template_story(story_type, child_name):
+    """Load story text and metadata from template folder"""
+    template = STORY_TEMPLATES[story_type]
+    template_folder = os.path.join('templates', template['folder'])
+    text_json_path = os.path.join(template_folder, 'text.json')
+    
+    try:
+        with open(text_json_path, 'r', encoding='utf-8') as f:
+            story_data = json.load(f)
+        
+        # Replace (child's name) in subtitle with actual child name
+        subtitle = story_data.get('subtitle', '')
+        if '(child\'s name)' in subtitle or '(child\'s name)' in subtitle:
+            subtitle = subtitle.replace('(child\'s name)', child_name).replace('(child\'s name)', child_name)
+        
+        story_data['subtitle'] = subtitle
+        return story_data
+    except Exception as e:
+        logger.error(f"Error loading template story: {e}")
+        raise
+
+def load_template_images(story_type):
+    """Load template images from template folder"""
+    template = STORY_TEMPLATES[story_type]
+    template_folder = os.path.join('templates', template['folder'])
+    
+    images = []
+    
+    # Load cover image
+    cover_path = os.path.join(template_folder, 'cover.png')
+    if os.path.exists(cover_path):
+        cover_img = Image.open(cover_path)
+        if cover_img.mode != 'RGB':
+            cover_img = cover_img.convert('RGB')
+        images.append(('cover', cover_img))
+    else:
+        raise FileNotFoundError(f"Cover image not found: {cover_path}")
+    
+    # Load page images (Page 1.png through Page 12.png)
+    for page_num in range(1, 13):
+        page_path = os.path.join(template_folder, f'Page {page_num}.png')
+        if os.path.exists(page_path):
+            page_img = Image.open(page_path)
+            if page_img.mode != 'RGB':
+                page_img = page_img.convert('RGB')
+            images.append((f'page_{page_num}', page_img))
+        else:
+            raise FileNotFoundError(f"Page {page_num} image not found: {page_path}")
+    
+    return images
+
+def replace_face_in_image(template_image, child_image_path, character_description):
+    """Replace face in template image with child's face using OpenAI DALL-E image editing"""
+    if not openai_client:
+        # If no API key, return original template
+        return template_image
+    
+    try:
+        # Save template image to temporary file for API
+        temp_template_path = os.path.join(app.config['UPLOAD_FOLDER'], f'temp_template_{uuid.uuid4().hex[:8]}.png')
+        template_image.save(temp_template_path, 'PNG')
+        
+        # Create a mask - we'll create a simple mask covering the face area
+        # For now, we'll use a center mask (face is typically in center-upper area)
+        # In production, you'd want to use face detection to create precise masks
+        mask_image = Image.new('RGBA', template_image.size, (0, 0, 0, 0))
+        # Create a mask covering center-upper portion (typical face location)
+        width, height = template_image.size
+        mask_box = (width // 4, height // 6, 3 * width // 4, height // 2)
+        
+        # Create mask with white (transparent in RGBA) for face area
+        draw = ImageDraw.Draw(mask_image)
+        # Draw ellipse for face mask
+        draw.ellipse(mask_box, fill=(255, 255, 255, 255))
+        
+        temp_mask_path = os.path.join(app.config['UPLOAD_FOLDER'], f'temp_mask_{uuid.uuid4().hex[:8]}.png')
+        mask_image.save(temp_mask_path, 'PNG')
+        
+        # Prepare prompt for face replacement
+        prompt = f"Replace the character's face with a face matching this description: {character_description}. Maintain the exact same pose, expression, and style as the original image. Keep all other elements identical."
+        
+        # Use DALL-E image editing API
+        with open(temp_template_path, 'rb') as template_file, open(temp_mask_path, 'rb') as mask_file:
+            response = openai_client.images.edit(
+                image=template_file,
+                mask=mask_file,
+                prompt=prompt,
+                n=1,
+                size="1024x1024"
+            )
+        
+        # Download the edited image
+        edited_image_url = response.data[0].url
+        img_response = requests.get(edited_image_url, timeout=30)
+        img_response.raise_for_status()
+        edited_image = Image.open(io.BytesIO(img_response.content))
+        
+        # Clean up temp files
+        try:
+            os.remove(temp_template_path)
+            os.remove(temp_mask_path)
+        except:
+            pass
+        
+        if edited_image.mode != 'RGB':
+            edited_image = edited_image.convert('RGB')
+        
+        return edited_image
+        
+    except Exception as e:
+        logger.error(f"Error replacing face in image: {e}")
+        # Return original template if face replacement fails
+        return template_image
+
+def generate_book_async(session_id, image_path, story_type, gender, child_name):
+    """Async function to generate the entire book using templates"""
     try:
         progress_tracker[session_id] = {
             'progress': 0, 
@@ -403,40 +343,53 @@ def generate_book_async(session_id, image_path, story_type, gender):
         }
         logger.info(f"Starting book generation for session {session_id}")
         
-        # Step 1: Analyze image
-        progress_tracker[session_id] = {'progress': 5, 'status': 'Analyzing image...'}
+        # Step 1: Analyze child's image for face replacement
+        progress_tracker[session_id] = {'progress': 5, 'status': 'Analyzing child\'s photo...'}
         character_description = analyze_image(image_path)
         
-        # Step 2: Generate story outline
-        progress_tracker[session_id] = {'progress': 15, 'status': 'Generating story outline...'}
-        story_outline = generate_story_outline(story_type, gender, character_description)
+        # Step 2: Load template story
+        progress_tracker[session_id] = {'progress': 10, 'status': 'Loading story template...'}
+        story_data = load_template_story(story_type, child_name)
         
-        # Step 3: Generate images
+        # Step 3: Load template images
+        progress_tracker[session_id] = {'progress': 20, 'status': 'Loading template images...'}
+        template_images = load_template_images(story_type)
+        
+        # Step 4: Replace faces in template images
         images_with_text = []
-        total_pages = len(story_outline.get('pages', []))
         
-        for idx, page in enumerate(story_outline.get('pages', [])):
-            progress = 15 + int((idx + 1) / total_pages * 75)
+        # Process cover image
+        progress_tracker[session_id] = {'progress': 25, 'status': 'Replacing face in cover image...'}
+        cover_img = template_images[0][1]
+        cover_img = replace_face_in_image(cover_img, image_path, character_description)
+        cover_text = f"{story_data.get('title', '')}\n{story_data.get('subtitle', '')}"
+        images_with_text.append((cover_img, cover_text))
+        
+        # Add story pages with text and face replacement
+        pages = story_data.get('pages', [])
+        for idx, page in enumerate(pages):
+            page_num = page.get('page_number', idx + 1)
+            progress = 25 + int((idx + 1) / len(pages) * 65)
             progress_tracker[session_id] = {
                 'progress': progress,
-                'status': f'Creating page {page["page_number"]} of {total_pages}...'
+                'status': f'Replacing face in page {page_num} of {len(pages)}...'
             }
             
-            # Generate image
-            image_prompt = page.get('image_prompt', '')
-            story_context = f"From {story_outline.get('story_title', '')}"
-            page_num = page.get('page_number', idx + 1)
-            image = generate_image(image_prompt, character_description, story_context, page_num)
+            # Get corresponding image (template_images[0] is cover, so Page 1 is at index 1, Page 2 at index 2, etc.)
+            # page_num should be 1-12, so we use it directly as index
+            if 1 <= page_num <= 12 and page_num < len(template_images):
+                page_img = template_images[page_num][1]
+                # Replace face in this page image
+                page_img = replace_face_in_image(page_img, image_path, character_description)
+                page_text = page.get('text', '')
+                images_with_text.append((page_img, page_text))
+            else:
+                logger.warning(f"No image found for page {page_num}")
             
-            # Get text for this page
-            page_text = page.get('text', '')
-            
-            images_with_text.append((image, page_text))
-            
-            # Rate limiting: small delay between requests
-            time.sleep(1)
+            # Small delay to avoid rate limiting
+            time.sleep(0.5)
         
-        # Step 4: Create PDF
+        # Step 5: Create PDF
         progress_tracker[session_id] = {'progress': 95, 'status': 'Creating PDF...'}
         output_path = os.path.join(app.config['OUTPUT_FOLDER'], f'{session_id}.pdf')
         create_pdf(images_with_text, output_path)
@@ -473,9 +426,13 @@ def upload():
         file = request.files['image']
         story_type = request.form.get('story_type')
         gender = request.form.get('gender')
+        child_name = request.form.get('child_name', '').strip()
         
         if file.filename == '':
             return jsonify({'error': 'No file selected'}), 400
+        
+        if not child_name:
+            return jsonify({'error': 'Child\'s name is required'}), 400
         
         # Validate file extension
         if not allowed_file(file.filename):
@@ -519,7 +476,7 @@ def upload():
         # Start async generation
         thread = threading.Thread(
             target=generate_book_async,
-            args=(session_id, file_path, story_type, gender)
+            args=(session_id, file_path, story_type, gender, child_name)
         )
         thread.daemon = True
         thread.start()
