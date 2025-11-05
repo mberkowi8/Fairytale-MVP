@@ -1,4 +1,5 @@
 Flask
+Flask-SocketIO
 openai
 Pillow
 reportlab
@@ -6,3 +7,6 @@ requests
 Werkzeug
 gunicorn
 python-dotenv
+eventlet
+python-socketio
+python-engineio
