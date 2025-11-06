@@ -217,11 +217,12 @@ def add_text_to_image(source_img, text):
     return result_img
 
 
-def generate_page_with_ai(template_img, child_img_path, page_text, char_description):
+def generate_page_with_ai(template_img, child_img_path, page_text, char_description, story_type):
     """
     Generate a complete page with child's face and text overlay using GPT Image editing.
     Compatible with OpenAI Python SDK v2.7.1.
     Includes detailed logging for progress tracking.
+    Now targets specific character by name to avoid editing other characters' faces.
     """
     if not openai_client or not USE_DALLE_GENERATION:
         logger.info("Using fallback text overlay (DALL-E disabled or unavailable)")
@@ -249,17 +250,23 @@ def generate_page_with_ai(template_img, child_img_path, page_text, char_descript
         )
         template_work.save(temp_template_path, 'PNG')
 
-        # Build prompt
-        prompt = f"""Replace the character's face with a face matching this description: {char_description}.
-Maintain the exact same pose, expression, and style as the original image.
-Keep all other elements identical.
+        # Determine character name based on story type
+        character_name = STORY_TEMPLATES[story_type]['character_name']
+
+        # Build prompt with specific character targeting
+        prompt = f"""IMPORTANT: Only replace the face of the MAIN CHARACTER ({character_name}) in this image.
+Do NOT modify any other characters' faces - leave grandmothers, wolves, giants, mothers, and all other characters exactly as they are.
+
+Replace ONLY {character_name}'s face with a face matching this description: {char_description}.
+Maintain {character_name}'s exact same pose, facial expression, and style as the original image.
+Keep all other elements and all other characters identical.
 
 Additionally, overlay the following text at the TOP of the image:
 {page_text}
 
 Don't block out any of the image. Just make sure the text color is easily legible over the image."""
 
-        logger.info("Running GPT Image edit for page prompt...")
+        logger.info(f"Running GPT Image edit for {character_name} on page...")
 
         # ✅ Correct API for OpenAI Python SDK v2.7.1
         with open(temp_template_path, "rb") as img_file:
@@ -277,7 +284,7 @@ Don't block out any of the image. Just make sure the text color is easily legibl
 
         os.remove(temp_template_path)
 
-        logger.info("✅ GPT Image edit completed successfully for this page.")
+        logger.info(f"✅ GPT Image edit completed successfully for {character_name}.")
         return edited_img.convert('RGB')
 
     except Exception as e:
@@ -354,7 +361,8 @@ def generate_book_async(session_id, image_path, story_type, gender, child_name):
             cover_img,
             image_path,
             cover_text,
-            character_description
+            character_description,
+            story_type
         )
         images_for_pdf.append(cover_with_face_and_text)
 
@@ -378,7 +386,8 @@ def generate_book_async(session_id, image_path, story_type, gender, child_name):
                     template_img,
                     image_path,
                     page_text,
-                    character_description
+                    character_description,
+                    story_type
                 )
                 images_for_pdf.append(complete_page)
             else:
