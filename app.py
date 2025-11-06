@@ -477,15 +477,26 @@ def upload():
         # Generate unique session ID
         session_id = str(uuid.uuid4())
 
-        # Save uploaded file with validated extension
+        # Save uploaded file
         filename = secure_filename(uploaded_file.filename)
-        # Ensure filename has valid extension
         if not filename or '.' not in filename:
             filename = f'upload_{session_id[:8]}.jpg'
 
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{session_id}_{filename}')
         uploaded_file.save(file_path)
         logger.info(f"File uploaded: {filename} for session {session_id}")
+
+        # --- Convert uploaded image to safe PNG format for OpenAI ---
+        try:
+            img = Image.open(file_path).convert("RGB")
+            safe_path = os.path.splitext(file_path)[0] + "_safe.png"
+            img.save(safe_path, format="PNG")
+            os.remove(file_path)  # remove original AVIF/HEIC/etc.
+            file_path = safe_path
+            logger.info(f"Converted uploaded image to safe PNG: {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to convert uploaded image to PNG: {e}")
+            return jsonify({'error': 'Failed to convert uploaded image to supported format.'}), 400
 
         # Clean up old sessions periodically
         cleanup_old_sessions()
